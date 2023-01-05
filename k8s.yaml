@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    run: k8s-triage
+  name: k8s-triage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      run: k8s-triage
+  template:
+    metadata:
+      labels:
+        run: k8s-triage
+    spec:
+      containers:
+      - image: gcr.io/apmtips/k8s-triage:latest
+        name: k8s-triage
+        env:
+        - name: PORT
+          value: "8080"
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github
+              key: access_token
+              optional: false
+---
+#apiVersion: networking.k8s.io/v1
+#kind: Ingress
+#metadata:
+#  name: k8s-triage
+#  annotations:
+#    kubernetes.io/ingress.global-static-ip-name: apmtips-ip
+#    networking.gke.io/managed-certificates: k8s-triage-cert
+#  labels:
+#    app: k8s-triage
+#spec:
+#  defaultBackend:
+#    service:
+#      name: k8s-triage
+#      port:
+#        number: 80
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: k8s-triage
+  labels:
+    app: k8s-triage
+spec:
+  selector:
+    run: k8s-triage
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+#apiVersion: networking.gke.io/v1beta2
+#kind: ManagedCertificate
+#metadata:
+#  name: k8s-triage-cert
+#spec:
+#  domains:
+#    - k8s-triage.apmtips.com
+---
+#kubectl apply -f - <<EOF
+#apiVersion: v1
+#kind: Secret
+#metadata:
+#  name: github
+#type: Opaque
+#data:
+#  access_token: ACCESS_TOKEN
+#EOF
+
+#kubectl list ingress
+#kubectl delete ingress k8s-triage
+#
+#kubectl apply -f - <<EOF
+#apiVersion: networking.k8s.io/v1
+#kind: Ingress
+#metadata:
+#  name: k8s-triage
+#  annotations:
+#    kubernetes.io/ingress.regional-static-ip-name: k8s-triage-ip
+#    networking.gke.io/managed-certificates: k8s-triage-cert
+#  labels:
+#    app: k8s-triage
+#spec:
+#  defaultBackend:
+#    service:
+#      name: k8s-triage
+#      port:
+#        number: 80
+#EOF
