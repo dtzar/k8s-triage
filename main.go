@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,6 +9,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/google/go-github/v40/github"
 	"golang.org/x/oauth2"
@@ -69,61 +70,134 @@ func nodePRsIndex(w http.ResponseWriter, r *http.Request) {
 	`)
 }
 
+func getClient(ctx context.Context) *github.Client {
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: access_token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+	return client
+}
+
+func getCardContentDetails(card *github.ProjectCard) (org string, repo string, id int, isIssue bool, err error) {
+	if card.GetContentURL() == "" {
+		return "", "", 0, false, errors.New("no content url")
+	}
+	u, err := url.Parse(card.GetContentURL())
+	if err != nil {
+		return "", "", 0, false, err
+	}
+	parts := strings.Split(u.Path, "/")
+	if len(parts) < 6 {
+		return "", "", 0, false, errors.New("not enough parts")
+	}
+
+	org = parts[2]
+	repo = parts[3]
+	id, err = strconv.Atoi(parts[5])
+	if err != nil {
+		return "", "", 0, false, err
+	}
+	isIssue = parts[4] == "issues"
+	return org, repo, id, isIssue, nil
+}
+
+func writeCards(ctx context.Context, sb *strings.Builder, cards []*github.ProjectCard) error {
+	for _, card := range cards {
+		if card.GetContentURL() == "" {
+			continue
+		}
+		org, repo, id, isIssue, err := getCardContentDetails(card)
+		if err != nil {
+			return err
+		}
+		if isIssue {
+			sb.WriteString(fmt.Sprintf("card: %v, issue: https://github.com/%v/%v/issue/%d\n", card.GetID(), org, repo, id))
+		} else {
+			sb.WriteString(fmt.Sprintf("card: %v, pr: https://github.com/%v/%v/pull/%d\n", card.GetID(), org, repo, id))
+		}
+	}
+	return nil
+}
+
+func returnError(w http.ResponseWriter, err error) {
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "Error: %v", err)
+}
+
+func processAddIssuesToColumn(ctx context.Context, w http.ResponseWriter, r *http.Request, org string, projectId int, columnName string, queries []string) {
+	client := getClient(ctx)
+
+	column, err := getColumn(ctx, client, org, projectId, columnName)
+	if err != nil {
+		returnError(w, errors.Wrap(err, "cannot find a column"))
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Issues for project https://github.com/orgs/%v/projects/%d (column %q)\n", org, projectId, columnName))
+
+	for _, query := range queries {
+		cards, err := addIssuesToColumn(ctx, client, query, column.GetID())
+		if err != nil {
+			returnError(w, errors.Wrapf(err, "cannot add issues to column for query %q", query))
+			return
+		}
+		err = writeCards(ctx, &sb, cards)
+		if err != nil {
+			returnError(w, errors.Wrapf(err, "cannot write cards to output for query %q", query))
+			return
+		}
+	}
+
+	fmt.Fprintf(w, sb.String())
+}
+
 func nodePRsAddIssues(w http.ResponseWriter, r *http.Request) {
+	org := "kubernetes"
+	projectId := 43
+	columnName := "Triage"
+	queries := []string{
+		"is:pr is:open label:sig/node -project:kubernetes/43 repo:kubernetes/test-infra",
+		"is:open label:sig/node+-project:kubernetes/43+repo:kubernetes/test-infra",
+		"is:open label:sig/node is:pr label:area/test -project:kubernetes/43 repo:kubernetes/kubernetes",
+		"is:issue is:open label:sig/node  label:area/test -project:kubernetes/43 repo:kubernetes/kubernetes",
+		"is:open label:sig/node is:pr label:kind/failing-test -project:kubernetes/43 repo:kubernetes/kubernetes",
+		"is:issue is:open label:sig/node label:kind/failing-test -project:kubernetes/43 repo:kubernetes/kubernetes",
+	}
 
 	fmt.Printf("Processing node PRs")
 
   ctx := context.Background()
 
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: access_token},
-	)
-	tc := oauth2.NewClient(ctx, ts)
+	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
 
-	client := github.NewClient(tc)
-
-
-	columnID, err := getColumnID(ctx, client, "kubernetes", 43, "Triage")
-
-	if err != nil {
-		fmt.Fprintf(w, "something went wrong: %q", err)
-		return
+	org = "kubernetes"
+	projectId = 59
+	columnName = "Triage"
+	queries = []string{
+		"is:open label:sig/node is:issue label:kind/bug org:kubernetes -project:kubernetes/59",
 	}
 
-	addIssuesToColumn(ctx, client, "is:pr is:open label:sig/node -project:kubernetes/43 repo:kubernetes/test-infra", columnID)
-	addIssuesToColumn(ctx, client, "is:open label:sig/node+-project:kubernetes/43+repo:kubernetes/test-infra", columnID)
-	addIssuesToColumn(ctx, client, "is:open label:sig/node is:pr label:area/test -project:kubernetes/43 repo:kubernetes/kubernetes", columnID)
-	addIssuesToColumn(ctx, client, "is:issue is:open label:sig/node  label:area/test -project:kubernetes/43 repo:kubernetes/kubernetes", columnID)
-	addIssuesToColumn(ctx, client, "is:open label:sig/node is:pr label:kind/failing-test -project:kubernetes/43 repo:kubernetes/kubernetes", columnID)
-	addIssuesToColumn(ctx, client, "is:issue is:open label:sig/node label:kind/failing-test -project:kubernetes/43 repo:kubernetes/kubernetes", columnID)
+	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
 
-	columnID, err = getColumnID(ctx, client, "kubernetes", 59, "Triage")
-
-	if err != nil {
-		fmt.Fprintf(w, "something wrong: %q", err)
-		return
+	org = "kubernetes"
+	projectId = 49
+	columnName = "Triage"
+	queries = []string{
+		"is:open label:sig/node is:pr org:kubernetes -project:kubernetes/49",
 	}
 
-	addIssuesToColumn(ctx, client, "is:open label:sig/node is:issue label:kind/bug org:kubernetes -project:kubernetes/59", columnID)
-
-	columnID, err = getColumnID(ctx, client, "kubernetes", 49, "Triage")
-
-	if err != nil {
-		fmt.Fprintf(w, "something wrong: %q", err)
-		return
-	}
-
-	addIssuesToColumn(ctx, client, "is:open label:sig/node is:pr org:kubernetes -project:kubernetes/49", columnID)
-
-	fmt.Fprintf(w, "Hello, World!\n")
+	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
 }
 
-func getColumnID(ctx context.Context, client *github.Client, org string, projectNumber int, columnsName string) (int64, error) {
+func getColumn(ctx context.Context, client *github.Client, org string, projectNumber int, columnsName string) (*github.ProjectColumn, error) {
 	projects, _, err := client.Organizations.ListProjects(ctx, org, &github.ProjectListOptions{State: "open", ListOptions: github.ListOptions{Page:1, PerPage: 100} })
 
 	if err != nil {
 		fmt.Printf("Organizations.ListProjects returned error: %v", err)
-		return -1, fmt.Errorf("Organizations.ListProjects returned error: %w", err)
+		return nil, fmt.Errorf("Organizations.ListProjects returned error: %w", err)
 	}
 
 	var targetProject *github.Project
@@ -138,14 +212,14 @@ func getColumnID(ctx context.Context, client *github.Client, org string, project
 
 	if targetProject == nil {
 		fmt.Printf("Project not found")
-		return -1, errors.New("Project not found")
+		return nil, errors.New("Project not found")
 	}
 
 	columns, _, err := client.Projects.ListProjectColumns(ctx, *targetProject.ID, &github.ListOptions{Page:1, PerPage: 100})
 
 	if err != nil {
 		fmt.Printf("Projects.ListProjectColumns returned error: %v", err)
-		return -1, fmt.Errorf("Projects.ListProjectColumns returned error: %w", err)
+		return nil, fmt.Errorf("Projects.ListProjectColumns returned error: %w", err)
 	}
 
 	fmt.Printf("Project: %s\n", *targetProject.URL)
@@ -162,36 +236,31 @@ func getColumnID(ctx context.Context, client *github.Client, org string, project
 
 	if targetColumn == nil {
 		fmt.Printf("Column not found")
-		return -1, errors.New("Column not found")
+		return nil, errors.New("Column not found")
 	}
 
 	fmt.Printf("Column: %d %s\n", *targetColumn.ID, *targetColumn.Name)
 
-	return *targetColumn.ID, nil
+	return targetColumn, nil
 
 }
 
-func addIssuesToColumn(ctx context.Context, client *github.Client, query string, columnID int64) error {
+func addIssuesToColumn(ctx context.Context, client *github.Client, query string, columnID int64) ([]*github.ProjectCard, error) {
+	result := []*github.ProjectCard{}
+
 	opts := &github.SearchOptions {
 		Sort: "forks",
 		Order: "desc",
 		ListOptions: github.ListOptions{Page: 1, PerPage: 100},
 	}
 
-	result, _, err := client.Search.Issues(ctx, query, opts)
+	issues, resp, err := client.Search.Issues(ctx, query, opts)
 	if err != nil {
-		fmt.Printf("Search.Issues returned error: %v", err)
-		return err
+		return nil, errors.Wrapf(err, "failed to search for issues (response: %q)", resp)
 	}
 
-	for _, issue := range result.Issues {
-		fmt.Printf("Issue: %d %s %s %d\n", *issue.ID, *issue.NodeID, *issue.Title, *issue.Number)
-
-
-		if err != nil {
-			fmt.Printf("Organizations.ListProjects returned error: %v", err)
-			return err
-		}
+	for _, issue := range issues.Issues {
+		//fmt.Printf("Issue: %d %s %s %d\n", *issue.ID, *issue.NodeID, *issue.Title, *issue.Number)
 
 		input := &github.ProjectCardOptions{
 			ContentID:   *issue.ID,
@@ -200,78 +269,82 @@ func addIssuesToColumn(ctx context.Context, client *github.Client, query string,
 
 		card, resp, err := client.Projects.CreateProjectCard(ctx, columnID, input)
 
-		// move new card to the bottom
-		_, err = client.Projects.MoveProjectCard(ctx, card.GetID(), &github.ProjectCardMoveOptions{Position: "bottom"})
-
 		if err != nil {
 			fmt.Printf("Projects.CreateProjectCard returned error: %v, %q", err, resp)
-			return err
+			return nil, errors.Wrapf(err, "failed to create a project card (response: %q)", resp)
 		}
 
-		fmt.Printf("Card: %s\n", *card.URL)
+		// move new card to the bottom, ignoring errors
+		_, err = client.Projects.MoveProjectCard(ctx, card.GetID(), &github.ProjectCardMoveOptions{Position: "bottom", ColumnID: columnID})
+
+		result = append(result, card)
 	}
 
-	return nil
-
+	return result, nil
 }
 
 func nodePRsNeedsRebase(w http.ResponseWriter, r *http.Request) {
-
   ctx := context.Background()
+	client := getClient(ctx)
 
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: access_token},
-	)
-	tc := oauth2.NewClient(ctx, ts)
+	org := "kubernetes"
+	projectId := 43
+	targetColumnName := "PRs Waiting on Author"
+	excludedColumnNames := []string{"Done", "Archive-it"}
 
-	client := github.NewClient(tc)
-
-
-	targetColumnID, err := getColumnID(ctx, client, "kubernetes", 43, "PRs Waiting on Author")
-	doneColumnID, err := getColumnID(ctx, client, "kubernetes", 43, "Done")
-	archiveItColumnID, err := getColumnID(ctx, client, "kubernetes", 43, "Archive-it")
+	targetColumn, err := getColumn(ctx, client, org, projectId, targetColumnName)
 
 	if err != nil {
-		fmt.Fprintf(w, "something went wrong: %q", err)
+		returnError(w, errors.Wrapf(err, "cannot get column ID for %v", targetColumnName))
 		return
 	}
 
+	excludedColumns := map[int64]struct{}{targetColumn.GetID(): {}}
 
+	for _, columnName := range excludedColumnNames {
+		column, err := getColumn(ctx, client, org, projectId, columnName)
+		if err != nil {
+			returnError(w, errors.Wrapf(err, "cannot get column ID for %v", columnName))
+			return
+		}
+		excludedColumns[column.GetID()] = struct{}{}
+	}
 
-	projects, _, err := client.Organizations.ListProjects(ctx, "kubernetes", &github.ProjectListOptions{State: "open", ListOptions: github.ListOptions{Page:1, PerPage: 100} })
+	projects, _, err := client.Organizations.ListProjects(ctx, org, &github.ProjectListOptions{State: "open", ListOptions: github.ListOptions{Page:1, PerPage: 100} })
 
 	if err != nil {
-		fmt.Printf("Organizations.ListProjects returned error: %v", err)
-		return //-1, fmt.Errorf("Organizations.ListProjects returned error: %w", err)
+		returnError(w, errors.Wrapf(err, "error listing projects for %v", org))
+		return
 	}
 
 	var targetProject *github.Project
 
 	for _, p := range projects {
-		//fmt.Printf("Project: %d %s %s %d\n", *p.ID, *p.Name, *p.HTMLURL, *p.Number)
-		if *p.Number == 43 {
+		if *p.Number == projectId {
 			targetProject = p
 			break
 		}
 	}
 
 	if targetProject == nil {
-		fmt.Printf("Project not found")
-		return //-1, errors.New("Project not found")
+		returnError(w, errors.New("project not found"))
+		return
 	}
-
 
 	columns, _, err := client.Projects.ListProjectColumns(ctx, *targetProject.ID, &github.ListOptions{Page:1, PerPage: 100})
 
 	if err != nil {
-		fmt.Printf("Projects.ListProjectColumns returned error: %v", err)
+		returnError(w, errors.Wrapf(err, "error listing columns for project %v", *targetProject.URL))
 		return
 	}
 
-	for _, column := range columns {
-		//fmt.Printf("Column: %d %s\n", *column.ID, *column.Name)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Moving needs-rebase issues for project https://github.com/orgs/%v/projects/%d\n", org, projectId))
 
-		if column.GetID() == targetColumnID || column.GetID() == doneColumnID || column.GetID() == archiveItColumnID {
+	result := []*github.ProjectCard{}
+
+	for _, column := range columns {
+		if _, ok := excludedColumns[column.GetID()]; ok {
 			continue
 		}
 
@@ -281,16 +354,14 @@ func nodePRsNeedsRebase(w http.ResponseWriter, r *http.Request) {
 			ListOptions: github.ListOptions{Page: 1, PerPage: 500},
 		}
 
-		cards, _, err := client.Projects.ListProjectCards(ctx, *column.ID, opts)
+		cards, _, err := client.Projects.ListProjectCards(ctx, column.GetID(), opts)
 
 		if err != nil {
-			fmt.Printf("Projects.ListProjectCards returned error: %v", err)
+			returnError(w, errors.Wrapf(err, "error listing cards for column %v", column.GetURL()))
 			return
 		}
 
 		for _, card := range cards {
-			//fmt.Printf("Card: %d %s\n", card.GetID(), card.GetContentURL())
-
 			u, err := url.Parse(card.GetContentURL())
 			if err != nil {
 				fmt.Println(err)
@@ -308,29 +379,23 @@ func nodePRsNeedsRebase(w http.ResponseWriter, r *http.Request) {
 
 			labels := []*github.Label{}
 
-			// Check if the card is an issue or pull request
-			if parts[4] == "issues" {
-				issueID, err := strconv.Atoi(parts[5])
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
+			org, repo, id, isIssue, err := getCardContentDetails(card)
 
-				issue, _, err := client.Issues.Get(ctx, parts[2], parts[3], issueID)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			if isIssue {
+				issue, _, err := client.Issues.Get(ctx, org, repo, id)
 				if err != nil {
 					fmt.Println(err)
 					continue
 				}
 
 				labels = issue.Labels
-			} else if parts[4] == "pulls" {
-				prID, err := strconv.Atoi(parts[5])
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
-
-				pr, _, err := client.PullRequests.Get(ctx, parts[2], parts[3], prID)
+			} else {
+				pr, _, err := client.PullRequests.Get(ctx, org, repo, id)
 				if err != nil {
 					fmt.Println(err)
 					continue
@@ -339,21 +404,27 @@ func nodePRsNeedsRebase(w http.ResponseWriter, r *http.Request) {
 				labels = pr.Labels
 			}
 
-
 			for _, label := range labels {
-				//fmt.Println(label.GetName())
-
 				// query all cards from the project with the label "needs-rebase" and move them to the "PRs Waiting on Author" column
 
 				if label.GetName() == "needs-rebase" {
 					fmt.Printf("Found needs-rebase card: %d %s\n", card.GetID(), card.GetContentURL())
 
-					client.Projects.MoveProjectCard(ctx, card.GetID(), &github.ProjectCardMoveOptions{Position: "bottom", ColumnID: targetColumnID})
+					result = append(result, card)
 
+					client.Projects.MoveProjectCard(ctx, card.GetID(), &github.ProjectCardMoveOptions{Position: "bottom", ColumnID: targetColumn.GetID()})
 				}
 			}
 		}
 	}
+
+	err = writeCards(ctx, &sb, result)
+	if err != nil {
+		returnError(w, errors.Wrap(err, "error writing cards"))
+		return
+	}
+
+	fmt.Fprintf(w, sb.String())
 }
 
 
