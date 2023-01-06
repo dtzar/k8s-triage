@@ -39,8 +39,12 @@ func main() {
 	http.HandleFunc("/triage", landing)
 
 	http.HandleFunc("/triage/node-prs", nodePRsIndex)
-	http.HandleFunc("/triage/node-prs/addIssues", nodePRsAddIssues)
-	http.HandleFunc("/triage/node-prs/needsRebase", nodePRsNeedsRebase)
+	http.HandleFunc("/triage/node-prs/addIssuesFor43", nodePRsAddIssuesFor43)
+	http.HandleFunc("/triage/node-prs/addIssuesFor49", nodePRsAddIssuesFor49)
+	http.HandleFunc("/triage/node-prs/addIssuesFor59", nodePRsAddIssuesFor59)
+	http.HandleFunc("/triage/node-prs/waitingOnAuthorFor43", nodePRsWaitingOnAuthorFor43)
+	http.HandleFunc("/triage/node-prs/waitingOnAuthorFor49", nodePRsWaitingOnAuthorFor49)
+
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -51,18 +55,24 @@ func landing(w http.ResponseWriter, r *http.Request) {
 func nodePRsIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, `
-		<h1>Hello, World!</h1>
-		<button onclick="addIssues()">Add Issues</button>
-		<button onclick="processNeedsRebase()">Process Needs Rebase</button>
+		<h1>Triage dashboard</h1>
+		<h2>SIG Node CI/Test Board</h2>
+    <a href="https://github.com/orgs/kubernetes/projects/43">Project board</a>
+		<button onclick="processIssues('/triage/node-prs/addIssuesFor43')">Add Issues</button>
+		<button onclick="processIssues('/triage/node-prs/waitingOnAuthorFor43')">Process Waiting On Author</button>
+		<h2>SIG Node PR Triage</h2>
+    <a href="https://github.com/orgs/kubernetes/projects/49">Project board</a>
+		<button onclick="processIssues('/triage/node-prs/addIssuesFor49')">Add Issues</button>
+		<button onclick="processIssues('/triage/node-prs/waitingOnAuthorFor49')">Process Waiting On Author</button>
+		<h2>SIG Node Bugs</h2>
+    <a href="https://github.com/orgs/kubernetes/projects/59">Project board</a>
+		<button onclick="processIssues('/triage/node-prs/addIssuesFor59')">Add Issues</button>
+
+		<h2>Output:</h2>
 		<div id="result"></div>
 		<script>
-			function addIssues() {
-				fetch('/triage/node-prs/addIssues').then(response => response.text()).then(result => {
-					document.getElementById('result').innerHTML = result;
-				});
-			}
-			function processNeedsRebase() {
-				fetch('/triage/node-prs/needsRebase').then(response => response.text()).then(result => {
+			function processIssues(query) {
+				fetch(query).then(response => response.text()).then(result => {
 					document.getElementById('result').innerHTML = result;
 				});
 			}
@@ -154,7 +164,7 @@ func processAddIssuesToColumn(ctx context.Context, w http.ResponseWriter, r *htt
 	fmt.Fprintf(w, sb.String())
 }
 
-func nodePRsAddIssues(w http.ResponseWriter, r *http.Request) {
+func nodePRsAddIssuesFor43(w http.ResponseWriter, r *http.Request) {
 	org := "kubernetes"
 	projectId := 43
 	columnName := "Triage"
@@ -167,27 +177,39 @@ func nodePRsAddIssues(w http.ResponseWriter, r *http.Request) {
 		"is:issue is:open label:sig/node label:kind/failing-test -project:kubernetes/43 repo:kubernetes/kubernetes",
 	}
 
-	fmt.Printf("Processing node PRs")
+	fmt.Printf("Processing node PRs for project %v", projectId)
 
   ctx := context.Background()
 
 	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
+}
 
-	org = "kubernetes"
-	projectId = 59
-	columnName = "Triage"
-	queries = []string{
+func nodePRsAddIssuesFor59(w http.ResponseWriter, r *http.Request) {
+	org := "kubernetes"
+	projectId := 59
+	columnName := "Triage"
+	queries := []string{
 		"is:open label:sig/node is:issue label:kind/bug org:kubernetes -project:kubernetes/59",
 	}
 
-	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
+	fmt.Printf("Processing node PRs for project %v", projectId)
 
-	org = "kubernetes"
-	projectId = 49
-	columnName = "Triage"
-	queries = []string{
+  ctx := context.Background()
+
+	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
+}
+
+func nodePRsAddIssuesFor49(w http.ResponseWriter, r *http.Request) {
+	org := "kubernetes"
+	projectId := 49
+	columnName := "Triage"
+	queries := []string{
 		"is:open label:sig/node is:pr org:kubernetes -project:kubernetes/49",
 	}
+
+	fmt.Printf("Processing node PRs for project %v", projectId)
+
+  ctx := context.Background()
 
 	processAddIssuesToColumn(ctx, w, r, org, projectId, columnName, queries)
 }
@@ -283,15 +305,7 @@ func addIssuesToColumn(ctx context.Context, client *github.Client, query string,
 	return result, nil
 }
 
-func nodePRsNeedsRebase(w http.ResponseWriter, r *http.Request) {
-  ctx := context.Background()
-	client := getClient(ctx)
-
-	org := "kubernetes"
-	projectId := 43
-	targetColumnName := "PRs Waiting on Author"
-	excludedColumnNames := []string{"Done", "Archive-it"}
-
+func processWaitingOnAuthor(ctx context.Context, w http.ResponseWriter, r *http.Request, client *github.Client, org string, projectId int, targetColumnName string, excludedColumnNames []string) {
 	targetColumn, err := getColumn(ctx, client, org, projectId, targetColumnName)
 
 	if err != nil {
@@ -427,6 +441,27 @@ func nodePRsNeedsRebase(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, sb.String())
 }
 
+func nodePRsWaitingOnAuthorFor43(w http.ResponseWriter, r *http.Request) {
+  ctx := context.Background()
+	client := getClient(ctx)
 
+	org := "kubernetes"
+	projectId := 43
+	targetColumnName := "PRs Waiting on Author"
+	excludedColumnNames := []string{"Done", "Archive-it"}
 
+	processWaitingOnAuthor(ctx, w, r, client, org, projectId, targetColumnName, excludedColumnNames)
+}
+
+func nodePRsWaitingOnAuthorFor49(w http.ResponseWriter, r *http.Request) {
+  ctx := context.Background()
+	client := getClient(ctx)
+
+	org := "kubernetes"
+	projectId := 49
+	targetColumnName := "Waiting on Author"
+	excludedColumnNames := []string{"Done"}
+
+	processWaitingOnAuthor(ctx, w, r, client, org, projectId, targetColumnName, excludedColumnNames)
+}
 
