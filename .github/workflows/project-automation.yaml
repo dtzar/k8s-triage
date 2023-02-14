@@ -23,7 +23,9 @@ jobs:
       - name: Move PR to ${{ env.in_progress }}
         uses: leonsteinhaeuser/project-beta-automations@v2.0.1
         with:
-          gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          gh_app_id: ${{ secrets.GH_APP_ID }}
+          gh_app_secret: ${{ secrets.GH_APP_SECRET }}
+          # gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           user: dtzar
           # organization: sample-org
           project_id: 2
@@ -37,7 +39,9 @@ jobs:
       - name: Move PR to ${{ env.done }}
         uses: leonsteinhaeuser/project-beta-automations@v2.0.1
         with:
-          gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          gh_app_id: ${{ secrets.GH_APP_ID }}
+          gh_app_secret: ${{ secrets.GH_APP_SECRET }}
+          # gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           user: dtzar
           # organization: sample-org
           project_id: 2
