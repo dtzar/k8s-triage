@@ -25,7 +25,7 @@ jobs:
         with:
           gh_app_id: ${{ secrets.GH_APP_ID }}
           gh_app_secret_key: ${{ secrets.GH_APP_SECRET_KEY }}
-          # gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          gh_token: ${{ github.token }}
           user: dtzar
           # organization: sample-org
           project_id: 2
@@ -41,7 +41,7 @@ jobs:
         with:
           gh_app_id: ${{ secrets.GH_APP_ID }}
           gh_app_secret_key: ${{ secrets.GH_APP_SECRET_KEY }}
-          # gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          gh_token: ${{ github.token }}
           user: dtzar
           # organization: sample-org
           project_id: 2
