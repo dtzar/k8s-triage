@@ -24,7 +24,7 @@ jobs:
         uses: leonsteinhaeuser/project-beta-automations@v2.0.1
         with:
           gh_app_id: ${{ secrets.GH_APP_ID }}
-          gh_app_secret: ${{ secrets.GH_APP_SECRET }}
+          gh_app_secret_key: ${{ secrets.GH_APP_SECRET_KEY }}
           # gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           user: dtzar
           # organization: sample-org
@@ -40,7 +40,7 @@ jobs:
         uses: leonsteinhaeuser/project-beta-automations@v2.0.1
         with:
           gh_app_id: ${{ secrets.GH_APP_ID }}
-          gh_app_secret: ${{ secrets.GH_APP_SECRET }}
+          gh_app_secret_key: ${{ secrets.GH_APP_SECRET_KEY }}
           # gh_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           user: dtzar
           # organization: sample-org
